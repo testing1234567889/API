@@ -13,14 +13,19 @@ module.exports = async function handler(req, res) {
     console.log('[WEBHOOK] ref_id:', ref_id, 'status:', status);
     console.log('[WEBHOOK] payload:', JSON.stringify(payload));
 
+    // ── 1. Validasi field wajib ──
     if (!ref_id || !status) {
       return res.status(400).json({ error: 'Missing ref_id or status' });
     }
 
+    // ── 2. Verifikasi signature IFGameshop ──
     const user_code = process.env.IFG_USER_CODE;
     const secret_key = process.env.IFG_SECRET_KEY;
+    const internal_api_key = process.env.INTERNAL_API_KEY;
+    const app_id = '69eae6c9e023d4c0d1b0b40d';
 
-    if (!user_code || !secret_key) {
+    if (!user_code || !secret_key || !internal_api_key) {
+      console.error('[WEBHOOK] Env variables belum diisi!');
       return res.status(500).json({ error: 'Server not configured' });
     }
 
@@ -35,7 +40,37 @@ module.exports = async function handler(req, res) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    console.log('[WEBHOOK] Auth OK! Transaksi', ref_id, '->', status);
+    console.log('[WEBHOOK] Auth OK! Update transaksi', ref_id, '->', status);
+
+    // ── 3. Update transaksi di Base44 ──
+    const updateRes = await fetch(
+      `https://app.base44.com/api/apps/${app_id}/functions/updateTransaction`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': internal_api_key
+        },
+        body: JSON.stringify({
+          ref_id,
+          status: /sukses/i.test(String(status)) ? 'Sukses' : 'Gagal',
+          trx_id: trx_id || '',
+          sn: sn || '',
+          message: message || '',
+          sisa_saldo: sisa_saldo ? Number(sisa_saldo) : 0,
+          price: price ? Number(price) : 0
+        })
+      }
+    );
+
+    const updateData = await updateRes.json();
+    console.log('[WEBHOOK] Base44 response:', updateRes.status, JSON.stringify(updateData));
+
+    if (!updateRes.ok) {
+      console.error('[WEBHOOK] Gagal update Base44:', updateData);
+    }
+
+    // ── 4. Selalu return 200 agar IFGameshop tidak retry ──
     return res.status(200).json({ status: 'ok' });
 
   } catch (err) {

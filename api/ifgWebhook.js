@@ -5,76 +5,50 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  const { ref_id, player_id, server_id, kode_produk } = req.body || {};
+
+  // Validasi internal API key
+  const incomingKey = req.headers['x-api-key'];
+  if (incomingKey !== process.env.INTERNAL_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (!ref_id || !player_id || !kode_produk) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const user_code = process.env.IFG_USER_CODE;
+  const secret_key = process.env.IFG_SECRET_KEY;
+
+  // Generate signature MD5
+  const signature = crypto
+    .createHash('md5')
+    .update(`${user_code}:${secret_key}:${ref_id}`)
+    .digest('hex');
+
   try {
-    const payload = req.body;
-    const authHeader = req.headers['authorization'] || '';
-    const { ref_id, status, trx_id, sn, message, sisa_saldo, price } = payload || {};
+    console.log('[ORDER] Kirim ke IFGameshop:', { ref_id, player_id, server_id, kode_produk });
 
-    console.log('[WEBHOOK] ref_id:', ref_id, 'status:', status);
-    console.log('[WEBHOOK] payload:', JSON.stringify(payload));
+    const response = await fetch('https://api.www.ifgameshop.com/v1/transaksi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_code,
+        ref_id,
+        player_id,
+        server_id: server_id || '',
+        kode_produk,
+        signature
+      })
+    });
 
-    // ── 1. Validasi field wajib ──
-    if (!ref_id || !status) {
-      return res.status(400).json({ error: 'Missing ref_id or status' });
-    }
+    const data = await response.json();
+    console.log('[ORDER] Response IFGameshop:', JSON.stringify(data));
 
-    // ── 2. Verifikasi signature IFGameshop ──
-    const user_code = process.env.IFG_USER_CODE;
-    const secret_key = process.env.IFG_SECRET_KEY;
-    const internal_api_key = process.env.INTERNAL_API_KEY;
-    const app_id = '69eae6c9e023d4c0d1b0b40d';
-
-    if (!user_code || !secret_key || !internal_api_key) {
-      console.error('[WEBHOOK] Env variables belum diisi!');
-      return res.status(500).json({ error: 'Server not configured' });
-    }
-
-    const expectedSig = crypto.createHash('md5')
-      .update(`${user_code}:${secret_key}:${ref_id}`)
-      .digest('hex');
-
-    const received = authHeader.replace(/^Bearer\s+/i, '').trim().toLowerCase();
-
-    if (received !== expectedSig.toLowerCase()) {
-      console.log('[WEBHOOK] Auth gagal. Expected:', expectedSig, 'Got:', authHeader);
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    console.log('[WEBHOOK] Auth OK! Update transaksi', ref_id, '->', status);
-
-    // ── 3. Update transaksi di Base44 ──
-    const updateRes = await fetch(
-      `https://app.base44.com/api/apps/${app_id}/functions/updateTransaction`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': internal_api_key
-        },
-        body: JSON.stringify({
-          ref_id,
-          status: /sukses/i.test(String(status)) ? 'Sukses' : 'Gagal',
-          trx_id: trx_id || '',
-          sn: sn || '',
-          message: message || '',
-          sisa_saldo: sisa_saldo ? Number(sisa_saldo) : 0,
-          price: price ? Number(price) : 0
-        })
-      }
-    );
-
-    const updateData = await updateRes.json();
-    console.log('[WEBHOOK] Base44 response:', updateRes.status, JSON.stringify(updateData));
-
-    if (!updateRes.ok) {
-      console.error('[WEBHOOK] Gagal update Base44:', updateData);
-    }
-
-    // ── 4. Selalu return 200 agar IFGameshop tidak retry ──
-    return res.status(200).json({ status: 'ok' });
+    return res.status(200).json(data);
 
   } catch (err) {
-    console.error('[WEBHOOK] Error:', err.message);
+    console.error('[ORDER] Error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 };

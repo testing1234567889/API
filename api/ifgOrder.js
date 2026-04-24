@@ -1,76 +1,33 @@
-const crypto = require('crypto');
+// Coba beberapa URL IFGameshop
+const IFG_URLS = [
+  'https://api.ifgameshop.com/v1/transaksi',
+  'https://www.ifgameshop.com/api/v1/transaksi',
+  'https://api.www.ifgameshop.com/v1/transaksi'
+];
 
-module.exports = async function handler(req, res) {
-  // Support GET dan POST
-  const method = req.method;
+let data = null;
+let lastError = null;
 
-  if (method !== 'GET' && method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
-
-  // Validasi internal API key
-  const incomingKey = req.headers['x-api-key'];
-  if (incomingKey !== process.env.INTERNAL_API_KEY) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const user_code = process.env.IFG_USER_CODE;
-  const secret_key = process.env.IFG_SECRET_KEY;
-
-  // Ambil params dari body (POST) atau query (GET)
-  const params = method === 'POST' ? req.body : req.query;
-  const { ref_id, player_id, server_id, kode_produk } = params || {};
-
-  if (!ref_id || !player_id || !kode_produk) {
-    return res.status(400).json({ error: 'Missing required fields: ref_id, player_id, kode_produk' });
-  }
-
+for (const url of IFG_URLS) {
   try {
-    let ifgResponse;
-
-    if (method === 'GET') {
-      // ── GET: semua param di URL termasuk SECRET langsung ──
-      const url = new URL('https://api.www.ifgameshop.com/v1/transaksi');
-      url.searchParams.set('user_code', user_code);
-      url.searchParams.set('ref_id', ref_id);
-      url.searchParams.set('player_id', player_id);
-      url.searchParams.set('server_id', server_id || '');
-      url.searchParams.set('kode_produk', kode_produk);
-      url.searchParams.set('secret', secret_key);
-
-      console.log('[ORDER GET] URL:', url.toString().replace(secret_key, '***'));
-      ifgResponse = await fetch(url.toString());
-
-    } else {
-      // ── POST: signature MD5 di body ──
-      const signature = crypto
-        .createHash('md5')
-        .update(`${user_code}:${secret_key}:${ref_id}`)
-        .digest('hex');
-
-      const body = {
-        user_code,
-        ref_id,
-        player_id,
-        server_id: server_id || '',
-        kode_produk,
-        signature
-      };
-
-      console.log('[ORDER POST] Body:', JSON.stringify({ ...body, signature: '***' }));
-      ifgResponse = await fetch('https://api.www.ifgameshop.com/v1/transaksi', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-    }
-
-    const data = await ifgResponse.json();
-    console.log('[ORDER] Response IFGameshop:', JSON.stringify(data));
-    return res.status(200).json(data);
-
+    console.log('[ORDER] Mencoba URL:', url);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000) // timeout 10 detik per URL
+    });
+    data = await response.json();
+    console.log('[ORDER] Berhasil via:', url, JSON.stringify(data));
+    break; // Kalau berhasil, stop loop
   } catch (err) {
-    console.error('[ORDER] Error:', err.message);
-    return res.status(500).json({ error: err.message });
+    console.log('[ORDER] Gagal via', url, ':', err.message);
+    lastError = err;
   }
-};
+}
+
+if (!data) {
+  throw new Error(`Semua URL gagal. Error terakhir: ${lastError?.message}`);
+}
+
+return res.status(200).json(data);
